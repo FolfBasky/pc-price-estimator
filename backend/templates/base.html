@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PC Price Estimator{% endblock %}</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #1a1a2e; line-height: 1.6; }
+        nav { background: #1a1a2e; padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }
+        nav a { color: #e0e0e0; text-decoration: none; font-weight: 500; }
+        nav a:hover { color: #fff; }
+        nav .brand { color: #fff; font-size: 1.2rem; font-weight: 700; }
+        .container { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+        .card { background: #fff; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 1rem; }
+        .btn { display: inline-block; padding: .6rem 1.4rem; border-radius: 8px; border: none; font-size: .95rem; cursor: pointer; text-decoration: none; font-weight: 500; }
+        .btn-primary { background: #4361ee; color: #fff; }
+        .btn-primary:hover { background: #3a56d4; }
+        .btn-secondary { background: #e4e6eb; color: #1a1a2e; }
+        .btn-secondary:hover { background: #d0d2d7; }
+        .btn-danger { background: #e63946; color: #fff; }
+        .btn-danger:hover { background: #c5303c; }
+        .btn-sm { padding: .4rem .8rem; font-size: .85rem; }
+        .btn:disabled { opacity: .6; cursor: not-allowed; }
+        input, select { padding: .6rem .8rem; border: 1px solid #d0d2d7; border-radius: 8px; font-size: .95rem; width: 100%; }
+        input:focus, select:focus { outline: none; border-color: #4361ee; box-shadow: 0 0 0 3px rgba(67,97,238,.15); }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: .75rem .5rem; border-bottom: 1px solid #e4e6eb; }
+        th { font-weight: 600; color: #555; font-size: .85rem; text-transform: uppercase; }
+        .badge { display: inline-block; padding: .2rem .6rem; border-radius: 999px; font-size: .75rem; font-weight: 600; }
+        .badge-done { background: #d1fae5; color: #065f46; }
+        .badge-running { background: #dbeafe; color: #1e40af; }
+        .badge-error { background: #fee2e2; color: #991b1b; }
+        .badge-pending { background: #fef3c7; color: #92400e; }
+        .progress { height: 8px; background: #e4e6eb; border-radius: 999px; overflow: hidden; margin: .5rem 0 1rem; }
+        .progress-bar { height: 100%; background: #4361ee; border-radius: 999px; transition: width .5s; }
+        .total-price { font-size: 1.5rem; font-weight: 700; color: #4361ee; }
+        .flex { display: flex; gap: .5rem; align-items: center; }
+        .flex-wrap { flex-wrap: wrap; }
+        .mb-1 { margin-bottom: .75rem; }
+        .mb-2 { margin-bottom: 1.5rem; }
+        .mt-2 { margin-top: 1.5rem; }
+        .gap-2 { gap: 1rem; }
+        .text-center { text-align: center; }
+        .empty-state { text-align: center; padding: 3rem 1rem; color: #666; }
+        .table-wrap { overflow-x: auto; }
+        @media (max-width: 600px) { nav { padding: .75rem 1rem; } .card { padding: 1rem; } }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/" class="brand">PC Price Estimator</a>
+        <a href="/builds">Сборки</a>
+    </nav>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>

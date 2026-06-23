@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# Environment & config
+.env
+venv/
+.venv/
+
+# AI models (download separately)
+models/
+
+# Uploads & generated files
+uploads/*
+!uploads/.gitkeep
+pc_prices.db
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temp
+test_calc.py
+check_browser.py
+
+# Nested projects
+PC_price_analyzer/

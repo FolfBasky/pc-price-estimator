@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Сохраненные сборки{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="flex flex-wrap mb-1" style="justify-content:space-between;">
+        <h2>Сборки</h2>
+        <a href="/" class="btn btn-primary btn-sm">+ Новая</a>
+    </div>
+
+    {% if builds %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Название</th>
+                    <th>Статус</th>
+                    <th>Итоговая цена</th>
+                    <th>Дата</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in builds %}
+                <tr>
+                    <td><a href="/builds/{{ b.id }}" style="color:#4361ee;text-decoration:none;font-weight:500;">{{ b.name }}</a></td>
+                    <td>
+                        {% if b.status == 'done' %}
+                        <span class="badge badge-done">Готово</span>
+                        {% elif b.status == 'running' %}
+                        <span class="badge badge-running">Парсинг...</span>
+                        {% elif b.status == 'partial' %}
+                        <span class="badge badge-pending">Частично</span>
+                        {% elif b.status == 'error' %}
+                        <span class="badge badge-error">Ошибка</span>
+                        {% elif b.status == 'blocked' %}
+                        <span class="badge badge-error">Avito блок</span>
+                        {% else %}
+                        <span class="badge badge-pending">{{ b.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if b.total_price %}
+                        <strong>{{ "%.0f"|format(b.total_price) }}&nbsp;₽</strong>
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                    <td>{{ b.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td>
+                        <form action="/api/builds/{{ b.id }}/refresh" method="POST" style="display:inline;">
+                            <button class="btn btn-secondary btn-sm">Обновить</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p style="font-size:1.2rem;margin-bottom:.5rem;">Нет сохраненных сборок</p>
+        <p>Создайте первую сборку для оценки стоимости</p>
+        <a href="/" class="btn btn-primary mt-2">Создать сборку</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

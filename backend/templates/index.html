@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}Новая сборка{% endblock %}
+{% block content %}
+<div class="card">
+    <h2 class="mb-2">Новая сборка</h2>
+
+    <!-- AI Description Parser -->
+    <div class="mb-2" style="background:#f8f9ff;border:1px solid #d0d5ff;border-radius:8px;padding:1rem;">
+        <label><strong>🧠 Разобрать описание через AI</strong></label>
+        <p style="color:#666;font-size:.85rem;margin:.3rem 0 .6rem;">
+            Вставьте текст сборки — AI определит комплектующие и заполнит список ниже.
+        </p>
+        <textarea id="aiText" rows="4" style="width:100%;resize:vertical;"
+            placeholder="Например: компьютер для игр: процессор ryzen 5 3600, видеокарта rtx 3060 12gb, память 16gb ddr4, ssd 1tb nvme, блок питания 650w"></textarea>
+        <div class="flex mt-1">
+            <button class="btn btn-primary btn-sm" id="parseBtn" onclick="parseAI()">🔍 Разобрать</button>
+            <span id="parseStatus" style="color:#666;font-size:.85rem;margin-left:.5rem;"></span>
+        </div>
+    </div>
+
+    <form id="buildForm">
+        <div class="mb-1">
+            <label><strong>Название сборки</strong></label>
+            <input type="text" id="buildName" placeholder="Игровая сборка (можно изменить)">
+        </div>
+
+        <div class="mb-1">
+            <label><strong>Комплектующие</strong> <small style="color:#888;font-weight:400;">— можно добавить вручную или через AI выше</small></label>
+        </div>
+
+        <div id="itemsContainer">
+            <div class="item-row mb-1" style="display:flex;gap:.5rem;align-items:flex-start;">
+                <select class="comp-type" style="flex:0 0 200px;" required>
+                    <option value="">-- тип --</option>
+                    {% for slug, name in component_types.items() %}
+                    <option value="{{ slug }}">{{ name }}</option>
+                    {% endfor %}
+                </select>
+                <div style="flex:1;">
+                    <input type="text" class="search-query" placeholder="Поисковый запрос" style="width:100%;" required>
+                    <small class="preview" style="color:#888;font-size:.8rem;display:block;margin-top:2px;"></small>
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.item-row').remove()">✕</button>
+            </div>
+        </div>
+
+        <div class="flex mb-2">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="addItem()">+ Добавить комплектующую</button>
+        </div>
+
+        <button type="submit" class="btn btn-primary" id="submitBtn">Оценить сборку</button>
+    </form>
+</div>
+
+<script>
+const STOP_WORDS = new Set([
+    "б/у","бу","б у",
+    "для","на","в","из","с","со","под","по","за","от","до",
+    "и","а","но","или",
+    "этот","эта","это","эти",
+    "продаю","продам","продажа",
+    "недорого","дешево","дешевый",
+    "срочно","есть",
+    "штука","штуки","шт",
+]);
+
+function simplifyQuery(query) {
+    return query.split(/\s+/).filter(w => !STOP_WORDS.has(w.toLowerCase())).join(' ');
+}
+
+function updatePreview(input) {
+    const preview = input.closest('.item-row').querySelector('.preview');
+    const simplified = simplifyQuery(input.value.trim());
+    if (simplified && simplified !== input.value.trim()) {
+        preview.textContent = '→ Будет отправлено: ' + simplified;
+    } else {
+        preview.textContent = '';
+    }
+}
+
+document.querySelectorAll('.search-query').forEach(el => {
+    el.addEventListener('input', function() { updatePreview(this); });
+});
+
+function addItem(compType, query) {
+    const container = document.getElementById('itemsContainer');
+    const row = document.createElement('div');
+    row.className = 'item-row mb-1';
+    row.style.display = 'flex';
+    row.style.gap = '.5rem';
+    row.style.alignItems = 'flex-start';
+
+    let typeOptions = '';
+    {% for slug, name in component_types.items() %}
+    typeOptions += `<option value="{{ slug }}"${compType === '{{ slug }}' ? ' selected' : ''}>{{ name }}</option>`;
+    {% endfor %}
+
+    const cleaned = query ? simplifyQuery(query) : '';
+    row.innerHTML = `
+        <select class="comp-type" style="flex:0 0 200px;" required>
+            <option value="">-- тип --</option>
+            ${typeOptions}
+        </select>
+        <div style="flex:1;">
+            <input type="text" class="search-query" placeholder="Поисковый запрос" style="width:100%;" value="${cleaned}" required>
+            <small class="preview" style="color:#888;font-size:.8rem;display:block;margin-top:2px;">${cleaned && cleaned !== query ? '→ ' + cleaned : ''}</small>
+        </div>
+        <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.item-row').remove()">✕</button>
+    `;
+    container.appendChild(row);
+    row.querySelector('.search-query').addEventListener('input', function() { updatePreview(this); });
+}
+
+async function parseAI() {
+    const text = document.getElementById('aiText').value.trim();
+    const status = document.getElementById('parseStatus');
+    if (!text) { alert('Введите описание сборки'); return; }
+    if (text.length > 5000) {
+        status.textContent = '❌ Текст слишком длинный (макс. 5000 символов)';
+        return;
+    }
+    if (/[\x00-\x08\x0E-\x1F]/.test(text) || /^[\{A-F0-9\}-]+\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(text)) {
+        status.textContent = '❌ AI работает только с текстом, не с изображениями';
+        return;
+    }
+
+    // Check if AI model is ready before sending
+    let check;
+    try {
+        check = await (await fetch('/api/ai-status')).json();
+    } catch(e) {}
+    if (check && !check.ready) {
+        status.textContent = '⏳ Модель AI ещё загружается... подождите несколько секунд';
+        return;
+    }
+
+    const btn = document.getElementById('parseBtn');
+    btn.disabled = true;
+    status.textContent = '⏳ обработка...';
+
+    try {
+        const resp = await fetch('/api/parse-description', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text})
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            status.textContent = '❌ ' + (err.detail || 'Ошибка');
+            btn.disabled = false;
+            return;
+        }
+        const data = await resp.json();
+
+        // Clear existing items
+        document.querySelectorAll('.item-row').forEach(el => el.remove());
+
+        // Add parsed items
+        if (data.items && data.items.length > 0) {
+            for (const item of data.items) {
+                addItem(item.component_type, item.search_query);
+            }
+            status.textContent = `✅ Найдено ${data.items.length} комплектующих`;
+        } else {
+            status.textContent = '❌ Ничего не найдено. Добавьте вручную.';
+        }
+    } catch (err) {
+        status.textContent = '❌ ' + err.message;
+    }
+    btn.disabled = false;
+}
+
+function setupFirstRow() {
+    const selects = document.querySelectorAll('.comp-type');
+    const inputs = document.querySelectorAll('.search-query');
+    if (selects.length === 0) addItem(null, '');
+}
+setupFirstRow();
+
+document.getElementById('buildForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Создание...';
+
+    const name = document.getElementById('buildName').value.trim() || 'Игровая сборка';
+    const typeEls = document.querySelectorAll('.comp-type');
+    const queryEls = document.querySelectorAll('.search-query');
+
+    const items = [];
+    for (let i = 0; i < typeEls.length; i++) {
+        const q = queryEls[i].value.trim();
+        if (typeEls[i].value && q) {
+            items.push({
+                component_type: typeEls[i].value,
+                search_query: simplifyQuery(q)
+            });
+        }
+    }
+
+    if (!items.length) {
+        alert('Добавьте хотя бы одну комплектующую');
+        btn.disabled = false;
+        btn.textContent = 'Оценить сборку';
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/builds', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({name, items})
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            window.location.href = '/builds/' + data.id;
+        } else {
+            alert('Ошибка при создании сборки');
+            btn.disabled = false;
+            btn.textContent = 'Оценить сборку';
+        }
+    } catch (err) {
+        alert('Ошибка: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Оценить сборку';
+    }
+});
+</script>
+{% endblock %}

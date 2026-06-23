@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+{% block title %}{{ build.name }}{% endblock %}
+{% block content %}
+
+<div class="card">
+    <div class="flex flex-wrap mb-1" style="justify-content:space-between;align-items:center;">
+        <div>
+            <h2>{{ build.name }}</h2>
+            <small style="color:#666;">
+                Создана: {{ build.created_at.strftime('%d.%m.%Y %H:%M') if build.created_at else '—' }} |
+                Статус:
+                {% if build.status == 'done' %}
+                <span class="badge badge-done">Готово</span>
+                {% elif build.status == 'running' %}
+                <span class="badge badge-running">Парсинг...</span>
+                {% elif build.status == 'partial' %}
+                <span class="badge badge-pending">Частично</span>
+                {% elif build.status == 'error' %}
+                <span class="badge badge-error">Ошибка</span>
+                {% elif build.status == 'blocked' %}
+                <span class="badge badge-error">Avito блок</span>
+                {% else %}
+                <span class="badge badge-pending">{{ build.status }}</span>
+                {% endif %}
+            </small>
+        </div>
+        <div class="flex">
+            {% if build.status != 'running' %}
+            <form action="/api/builds/{{ build.id }}/refresh" method="POST" style="display:inline;">
+                <button class="btn btn-secondary btn-sm">Обновить цены</button>
+            </form>
+            {% endif %}
+            <a href="/api/builds/{{ build.id }}/export/txt" class="btn btn-secondary btn-sm">TXT</a>
+            <a href="/builds/{{ build.id }}/print" class="btn btn-secondary btn-sm" target="_blank">PDF</a>
+        </div>
+    </div>
+
+    {% if build.status == 'blocked' %}
+    <div class="mb-2" style="background:#fff3f3;border:1px solid #fecaca;border-radius:8px;padding:1rem;">
+        <strong style="color:#dc2626;">Avito заблокировал доступ</strong>
+        <p style="margin-top:.5rem;color:#666;font-size:.9rem;">Попробуйте использовать другой IP или VPN.</p>
+    </div>
+    {% endif %}
+
+    {% if build.status == 'running' %}
+    <div class="mb-2">
+        <div style="display:flex;justify-content:space-between;font-size:.9rem;color:#666;">
+            <span>Парсинг цен...</span>
+            <span id="progressText">{{ build.progress }}%</span>
+        </div>
+        <div class="progress">
+            <div class="progress-bar" id="progressBar" style="width:{{ build.progress }}%;"></div>
+        </div>
+        <p style="color:#666;font-size:.85rem;" id="statusText">Обработано {{ items_done }} из {{ items_total }}</p>
+    </div>
+    {% endif %}
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:30px;"></th>
+                    <th>Тип</th>
+                    <th>Запрос</th>
+                    <th>Статус</th>
+                    <th>Медиана</th>
+                    <th>Средняя</th>
+                    <th>Мин</th>
+                    <th>Макс</th>
+                    <th>Объявлений</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items_data %}
+                <tr id="row-{{ item.id }}">
+                    <td><button class="btn-icon" title="Скрыть" onclick="toggleItem({{ item.id }})">−</button></td>
+                    <td>{{ item.component_name }}</td>
+                    <td><small>{{ item.search_query }}</small></td>
+                    <td>
+                        {% if item.status == 'done' %}
+                        <span class="badge badge-done">Готово</span>
+                        {% elif item.status == 'running' %}
+                        <span class="badge badge-running">...</span>
+                        {% elif item.status == 'error' %}
+                        <span class="badge badge-error">Нет данных</span>
+                        {% else %}
+                        <span class="badge badge-pending">{{ item.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.price and item.price.median %}
+                        <strong>{{ "%.0f"|format(item.price.median) }}&nbsp;₽</strong>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>{% if item.price and item.price.avg %}{{ "%.0f"|format(item.price.avg) }}&nbsp;₽{% else %}—{% endif %}</td>
+                    <td>{% if item.price and item.price.min %}{{ "%.0f"|format(item.price.min) }}&nbsp;₽{% else %}—{% endif %}</td>
+                    <td>{% if item.price and item.price.max %}{{ "%.0f"|format(item.price.max) }}&nbsp;₽{% else %}—{% endif %}</td>
+                    <td>{% if item.price and item.price.listings == -1 %}🚫{% elif item.price %}{{ item.price.listings }}{% if item.price.listings_raw > item.price.listings %} <small style="color:#888;">(из {{ item.price.listings_raw }})</small>{% endif %}{% else %}—{% endif %}</td>
+                    <td><button class="btn btn-secondary btn-sm" onclick="editPrice(this, {{ item.id }})">✎</button></td>
+                </tr>
+                {% endfor %}
+                <tr id="editRow" style="display:none;">
+                    <td colspan="10">
+                        <div class="flex flex-wrap gap-2" style="align-items:center;padding:.5rem;">
+                            <strong>Ручной ввод цены:</strong>
+                            <input type="number" id="manualPrice" placeholder="Цена ₽" style="width:150px;">
+                            <button class="btn btn-primary btn-sm" onclick="saveManualPrice()">Сохранить</button>
+                            <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">Отмена</button>
+                        </div>
+                    </td>
+                </tr>
+            </tbody>
+            {% if build.total_price %}
+            <tfoot>
+                <tr>
+                    <td></td>
+                    <td colspan="3"><strong>Итого:</strong></td>
+                    <td><strong class="total-price">{{ "%.0f"|format(build.total_price) }}&nbsp;₽</strong></td>
+                    <td colspan="5"></td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+
+{% if items_hidden %}
+<div class="card">
+    <div class="flex mb-1" style="justify-content:space-between;align-items:center;cursor:pointer;" onclick="toggleHidden()">
+        <h3 style="font-size:1rem;">Скрытые ({{ items_hidden|length }})</h3>
+        <span id="hiddenToggle">▼</span>
+    </div>
+    <div id="hiddenSection" style="display:none;">
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:30px;"></th>
+                        <th style="width:30px;"></th>
+                        <th>Тип</th>
+                        <th>Запрос</th>
+                        <th>Цена</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in items_hidden %}
+                    <tr>
+                        <td><button class="btn-icon" title="Вернуть" onclick="toggleItem({{ item.id }})">+</button></td>
+                        <td><button class="btn-icon btn-icon-danger" title="Удалить" onclick="deleteItem({{ item.id }})">×</button></td>
+                        <td>{{ item.component_name }}</td>
+                        <td><small>{{ item.search_query }}</small></td>
+                        <td>{% if item.price and item.price.median %}{{ "%.0f"|format(item.price.median) }}&nbsp;₽{% else %}—{% endif %}</td>
+                        <td><button class="btn btn-secondary btn-sm" onclick="editPrice(this, {{ item.id }})">✎</button></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <h3 class="mb-1" style="font-size:1rem;">Добавить комплектующую</h3>
+    <div class="flex flex-wrap gap-2">
+        <select id="newCompType" style="flex:0 0 200px;">
+            <option value="">-- тип --</option>
+            {% for slug, name in component_types.items() %}
+            <option value="{{ slug }}">{{ name }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" id="newSearchQuery" placeholder="Поисковый запрос" style="flex:1;">
+        <button class="btn btn-primary btn-sm" onclick="addItem()">+ Добавить</button>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="mb-1" style="font-size:1rem;">Фото сборки</h3>
+    <div class="flex flex-wrap gap-2" id="photoGallery">
+        {% for p in photos %}
+        <div class="photo-thumb" id="photo-{{ p.id }}">
+            <img src="/uploads/{{ p.filename }}" alt="{{ p.original_name }}" onclick="window.open('/uploads/{{ p.filename }}','_blank')">
+            <button class="btn-icon btn-icon-danger photo-del" onclick="deletePhoto({{ p.id }})">×</button>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="flex mt-2">
+        <input type="file" id="photoInput" accept="image/*" style="display:none;" multiple onchange="uploadPhotos(this)">
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('photoInput').click()">+ Загрузить фото</button>
+    </div>
+</div>
+
+<div class="flex flex-wrap gap-2 mt-2">
+    <a href="/" class="btn btn-primary btn-sm">+ Новая сборка</a>
+    <a href="/builds" class="btn btn-secondary btn-sm">Все сборки</a>
+</div>
+
+<script>
+let editingItemId = null;
+
+function editPrice(btn, itemId) {
+    editingItemId = itemId;
+    const row = document.getElementById('editRow');
+    const input = document.getElementById('manualPrice');
+    // Try to read current price from table
+    const tr = btn.closest('tr');
+    const priceCell = tr.querySelector('strong');
+    input.value = priceCell ? priceCell.textContent.replace(/[^\d]/g, '') : '';
+    tr.parentNode.insertBefore(row, tr.nextSibling);
+    row.style.display = '';
+    input.focus();
+}
+
+function cancelEdit() {
+    document.getElementById('editRow').style.display = 'none';
+    editingItemId = null;
+}
+
+function saveManualPrice() {
+    const price = document.getElementById('manualPrice').value;
+    if (!price || isNaN(price) || Number(price) <= 0) {
+        alert('Введите корректную цену');
+        return;
+    }
+    fetch('/api/builds/{{ build.id }}/items/' + editingItemId + '/price', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({median_price: Number(price)})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            location.reload();
+        } else {
+            alert('Ошибка: ' + JSON.stringify(data));
+        }
+    })
+    .catch(err => alert('Ошибка: ' + err));
+}
+
+function toggleItem(itemId) {
+    fetch('/api/builds/{{ build.id }}/items/' + itemId + '/toggle', {
+        method: 'POST'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            location.reload();
+        }
+    })
+    .catch(err => alert('Ошибка: ' + err));
+}
+
+function deleteItem(itemId) {
+    if (!confirm('Удалить комплектующую?')) return;
+    fetch('/api/builds/{{ build.id }}/items/' + itemId, {
+        method: 'DELETE'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            location.reload();
+        }
+    })
+    .catch(err => alert('Ошибка: ' + err));
+}
+
+function addItem() {
+    const type = document.getElementById('newCompType').value;
+    const query = document.getElementById('newSearchQuery').value.trim();
+    if (!type || !query) {
+        alert('Выберите тип и введите запрос');
+        return;
+    }
+    fetch('/api/builds/{{ build.id }}/items', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({component_type: type, search_query: query})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.id) {
+            location.reload();
+        } else {
+            alert('Ошибка: ' + JSON.stringify(data));
+        }
+    })
+    .catch(err => alert('Ошибка: ' + err));
+}
+
+function uploadPhotos(input) {
+    const files = input.files;
+    if (!files.length) return;
+    const formData = new FormData();
+    for (const f of files) {
+        formData.append('file', f);
+    }
+    fetch('/api/builds/{{ build.id }}/photos', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(() => { location.reload(); })
+    .catch(err => alert('Ошибка загрузки: ' + err));
+    input.value = '';
+}
+
+function deletePhoto(photoId) {
+    if (!confirm('Удалить фото?')) return;
+    fetch('/api/builds/{{ build.id }}/photos/' + photoId, {
+        method: 'DELETE'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            const el = document.getElementById('photo-' + photoId);
+            if (el) el.remove();
+        }
+    })
+    .catch(err => alert('Ошибка: ' + err));
+}
+
+function toggleHidden() {
+    const section = document.getElementById('hiddenSection');
+    const toggle = document.getElementById('hiddenToggle');
+    if (section.style.display === 'none') {
+        section.style.display = '';
+        toggle.textContent = '▲';
+    } else {
+        section.style.display = 'none';
+        toggle.textContent = '▼';
+    }
+}
+
+{% if build.status == 'running' %}
+function pollStatus() {
+    fetch('/api/builds/{{ build.id }}/status')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('progressBar').style.width = data.progress + '%';
+            document.getElementById('progressText').textContent = data.progress + '%';
+            document.getElementById('statusText').textContent = 'Обработано ' + data.items_done + ' из ' + data.items_total;
+            if (data.status === 'running') {
+                setTimeout(pollStatus, 2000);
+            } else {
+                location.reload();
+            }
+        })
+        .catch(() => setTimeout(pollStatus, 3000));
+}
+setTimeout(pollStatus, 2000);
+{% endif %}
+</script>
+
+<style>
+.btn-icon {
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid #d0d2d7; background: #f8f9fa;
+    cursor: pointer; font-size: 1rem; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+    line-height: 1; color: #555;
+}
+.btn-icon:hover { background: #e4e6eb; }
+.btn-icon-danger { color: #e63946; border-color: #fecaca; }
+.btn-icon-danger:hover { background: #fee2e2; }
+.photo-thumb {
+    position: relative; width: 100px; height: 100px;
+    border-radius: 8px; overflow: hidden; border: 1px solid #e4e6eb; cursor: pointer;
+}
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.photo-thumb .photo-del {
+    position: absolute; top: 4px; right: 4px;
+    width: 22px; height: 22px; font-size: .85rem;
+}
+</style>
+{% endblock %}
