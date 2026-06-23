@@ -45,6 +45,10 @@ app = FastAPI(title="PC Price Estimator", lifespan=lifespan)
 # Serve uploaded files
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
+# Serve static files (favicon, etc.)
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 
 # ---- Page routes ----
 
