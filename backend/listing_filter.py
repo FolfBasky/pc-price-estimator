@@ -53,22 +53,32 @@ def _normalize(text: str) -> str:
     return re.sub(r'\s+', ' ', text).strip()
 
 
-def _get_key_terms(query: str) -> list[str]:
-    """Extract key search terms from the query."""
-    q = query.lower()
-    terms = []
-    m = re.search(r'(?:rtx|gtx|rx|ryzen|core\s*i\d|i\d|intel|amd)\s*\S*', q)
-    if m:
-        terms.append(m.group())
-    nums = re.findall(r'\d{2,}[a-zа-я]*', q)
-    terms.extend(nums)
-    return terms
+GENERIC_WORDS = {
+    "ram", "cpu", "gpu", "psu", "pc", "box", "oem", "tray", "retail", "new",
+    "ssd", "hdd", "nvme", "m2",
+}
+
+
+def _get_core_words(query: str) -> list[str]:
+    """Extract specific model words from the end of the query (most specific part)."""
+    q = _normalize(query)
+    words = [w for w in q.split() if w not in GENERIC_WORDS]
+    core = []
+    for w in reversed(words):
+        if len(core) >= 2:
+            break
+        has_num = bool(re.search(r'\d', w))
+        if (has_num and len(w) >= 2) or len(w) >= 3:
+            core.append(w)
+    return core[::-1] if core else words[-1:]
 
 
 def _contains_model(title: str, search_query: str) -> bool:
-    """Check if the listing title contains the key model identifier from search query."""
     q = _normalize(search_query)
     t = _normalize(title)
+    q_words = q.split()
+    t_words = t.split()
+    t_joined = ' '.join(t_words)
 
     if not q or not t:
         return False
@@ -76,30 +86,29 @@ def _contains_model(title: str, search_query: str) -> bool:
     if q in t:
         return True
 
-    q_words = q.split()
-    t_words = t.split()
+    core = _get_core_words(search_query)
 
-    # At least 2 common words = likely match
+    # Strict: all core words must appear in title
+    if len(core) >= 2:
+        return all(cw in t_joined for cw in core)
+
+    # Single core word
+    if len(core) == 1:
+        if core[0] in t_joined:
+            return True
+        # If core is a pure number like "3070", also allow it as standalone word
+        if re.match(r'^\d+$', core[0]):
+            return core[0] in t_words
+        return False
+
+    # No core words: fallback to common words
     common = set(q_words) & set(t_words)
     if len(common) >= 2:
         return True
 
-    # Key terms match (brand+model like "rtx 3080", "i7 12700k")
-    for term in _get_key_terms(search_query):
-        term_norm = _normalize(term)
-        if term_norm in t:
-            return True
-
-    # If query has a number, check if it appears as a word in title
-    for w in q_words:
-        if re.search(r'\d', w) and w in t_words:
-            return True
-
-    # Last resort: any query number appears in title
-    q_nums = set(re.findall(r'\d+', q))
-    t_nums = set(re.findall(r'\d+', t))
-    if q_nums and q_nums & t_nums:
-        return True
+    q_nums = set(re.findall(r'\d{3,}', q))
+    t_nums = set(re.findall(r'\d{3,}', t))
+    return bool(q_nums and q_nums & t_nums)
 
     return False
 
