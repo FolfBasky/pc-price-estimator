@@ -53,22 +53,70 @@ def _normalize(text: str) -> str:
     return re.sub(r'\s+', ' ', text).strip()
 
 
-def _get_key_terms(query: str) -> list[str]:
-    """Extract key search terms from the query."""
-    q = query.lower()
-    terms = []
-    m = re.search(r'(?:rtx|gtx|rx|ryzen|core\s*i\d|i\d|intel|amd)\s*\S*', q)
-    if m:
-        terms.append(m.group())
-    nums = re.findall(r'\d{2,}[a-zа-я]*', q)
-    terms.extend(nums)
-    return terms
+_GENERIC_CAPACITIES = {
+    "8gb", "16gb", "32gb", "64gb", "128gb", "256gb", "512gb",
+    "1tb", "2tb", "4tb", "500gb", "120gb", "240gb", "480gb",
+}
+
+_GENERIC_WORDS = {
+    "ram", "cpu", "gpu", "psu", "pc", "box", "oem", "tray", "retail", "new",
+    "ssd", "hdd", "nvme", "m2",
+}
+
+_SPECIFIC_BRANDS = {
+    "rtx", "gtx", "rx", "radeon", "ryzen", "core", "xeon", "pentium", "celeron",
+    "intel", "amd", "nvidia", "geforce", "quadro",
+}
+
+
+def _is_specific_query(query: str) -> bool:
+    """Query targets a specific product model (not generic capacity/spec)."""
+    q = _normalize(query)
+    words = q.split()
+    # Mixed letter-digit word like 5600x, x470, 600w
+    if re.search(r'(?:\d+[a-zа-яё]+|[a-zа-яё]+\d+)', q):
+        return True
+    # A ≥4 digit number that isn't a common capacity
+    for w in words:
+        if re.match(r'^\d{4,}$', w) and w not in _GENERIC_CAPACITIES:
+            return True
+    # A short number (3+ digits) next to a known brand/series word
+    nums = re.findall(r'\d{3,}', q)
+    brands = [w for w in words if w in _SPECIFIC_BRANDS]
+    if nums and brands:
+        return True
+    # A distinctive word (≥5 chars, not generic) with a number in the query
+    has_distinctive = any(len(w) >= 5 and w not in _GENERIC_WORDS
+                          for w in words)
+    has_any_number = bool(re.search(r'\d', q))
+    if has_distinctive and has_any_number:
+        return True
+    return False
+
+
+def _get_identifiers(query: str) -> list[str]:
+    """Extract distinctive identifying words from a specific product query."""
+    q = _normalize(query)
+    words = q.split()
+    idents = []
+    for w in reversed(words):
+        if w in _GENERIC_WORDS or w in _GENERIC_CAPACITIES:
+            continue
+        if len(w) == 1:
+            continue
+        if len(w) >= 3 or re.search(r'\d', w):
+            idents.append(w)
+            if len(idents) >= 2:
+                break
+    return idents[::-1] if idents else words[-1:]
 
 
 def _contains_model(title: str, search_query: str) -> bool:
-    """Check if the listing title contains the key model identifier from search query."""
     q = _normalize(search_query)
     t = _normalize(title)
+    q_words = q.split()
+    t_words = t.split()
+    t_joined = ' '.join(t_words)
 
     if not q or not t:
         return False
@@ -76,31 +124,22 @@ def _contains_model(title: str, search_query: str) -> bool:
     if q in t:
         return True
 
-    q_words = q.split()
-    t_words = t.split()
+    if _is_specific_query(search_query):
+        idents = _get_identifiers(search_query)
+        if idents:
+            return all(i in t_joined for i in idents)
 
-    # At least 2 common words = likely match
+    # Loose fallback for generic queries
     common = set(q_words) & set(t_words)
     if len(common) >= 2:
         return True
-
-    # Key terms match (brand+model like "rtx 3080", "i7 12700k")
-    for term in _get_key_terms(search_query):
-        term_norm = _normalize(term)
-        if term_norm in t:
-            return True
-
-    # If query has a number, check if it appears as a word in title
     for w in q_words:
         if re.search(r'\d', w) and w in t_words:
             return True
-
-    # Last resort: any query number appears in title
     q_nums = set(re.findall(r'\d+', q))
     t_nums = set(re.findall(r'\d+', t))
     if q_nums and q_nums & t_nums:
         return True
-
     return False
 
 

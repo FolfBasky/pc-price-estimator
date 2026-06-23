@@ -53,23 +53,34 @@ def calc_stats(raw_prices: list[float]) -> dict:
         sane = sorted(raw_prices)
 
     sorted_prices = sorted(sane)
-    q1 = sorted_prices[len(sorted_prices) // 4]
-    q3 = sorted_prices[3 * len(sorted_prices) // 4]
-    iqr = q3 - q1
-    lower = q1 - 1.5 * iqr
-    upper = q3 + 1.5 * iqr
-    filtered = [p for p in sorted_prices if lower <= p <= upper]
+    n = len(sorted_prices)
 
-    if len(filtered) < 2:
-        filtered = sorted_prices
+    # Cluster-based filtering: find the largest price gap (>1.5x),
+    # take the cluster before it (cheapest items, likely correct component)
+    # If the cheap cluster is too small (<3 items), take the next one
+    best_idx = n
+    max_ratio = 0
+    for i in range(1, n):
+        if sorted_prices[i - 1] > 0:
+            r = sorted_prices[i] / sorted_prices[i - 1]
+            if r > max_ratio and r > 1.5:
+                max_ratio = r
+                best_idx = i
+
+    if best_idx < n:
+        cluster = sorted_prices[:best_idx]
+        if len(cluster) < 3 and best_idx + 3 <= n:
+            cluster = sorted_prices[best_idx:]
+    else:
+        cluster = sorted_prices
 
     return {
-        "avg": round(sum(filtered) / len(filtered), 2),
-        "median": round(median(filtered), 2),
-        "min": round(min(filtered), 2),
-        "max": round(max(filtered), 2),
+        "avg": round(sum(cluster) / len(cluster), 2),
+        "median": round(median(cluster), 2),
+        "min": round(min(cluster), 2),
+        "max": round(max(cluster), 2),
         "listings_raw": len(raw_prices),
-        "listings": len(filtered),
+        "listings": len(cluster),
     }
 
 
