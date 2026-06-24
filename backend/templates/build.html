@@ -42,7 +42,7 @@
     </div>
     {% endif %}
 
-    {% if build.status == 'running' %}
+{% if build.status not in ('done', 'error', 'blocked') %}
     <div class="mb-2">
         <div style="display:flex;justify-content:space-between;font-size:.9rem;color:#666;">
             <span>Парсинг цен...</span>
@@ -52,6 +52,7 @@
             <div class="progress-bar" id="progressBar" style="width:{{ build.progress }}%;"></div>
         </div>
         <p style="color:#666;font-size:.85rem;" id="statusText">Обработано {{ items_done }} из {{ items_total }}</p>
+        <p style="color:#333;font-size:.9rem;margin-top:4px;" id="totalLive">Текущая сумма: —</p>
     </div>
     {% endif %}
 
@@ -75,9 +76,9 @@
                 {% for item in items_data %}
                 <tr id="row-{{ item.id }}">
                     <td><button class="btn-icon" title="Скрыть" onclick="toggleItem({{ item.id }})">−</button></td>
-                    <td>{{ item.component_name }}</td>
-                    <td><small>{{ item.search_query }}</small></td>
-                    <td>
+                    <td class="cell-name-{{ item.id }}">{{ item.component_name }}</td>
+                    <td class="cell-query-{{ item.id }}"><small>{{ item.search_query }}</small></td>
+                    <td id="cell-status-{{ item.id }}">
                         {% if item.status == 'done' %}
                         <span class="badge badge-done">Готово</span>
                         {% elif item.status == 'running' %}
@@ -88,15 +89,29 @@
                         <span class="badge badge-pending">{{ item.status }}</span>
                         {% endif %}
                     </td>
-                    <td>
-                        {% if item.price and item.price.median %}
+                    <td id="cell-median-{{ item.id }}">
+                        {% if item.price and item.price.median is not none %}
                         <strong>{{ "%.0f"|format(item.price.median) }}&nbsp;₽</strong>
                         {% else %}—{% endif %}
                     </td>
-                    <td>{% if item.price and item.price.avg %}{{ "%.0f"|format(item.price.avg) }}&nbsp;₽{% else %}—{% endif %}</td>
-                    <td>{% if item.price and item.price.min %}{{ "%.0f"|format(item.price.min) }}&nbsp;₽{% else %}—{% endif %}</td>
-                    <td>{% if item.price and item.price.max %}{{ "%.0f"|format(item.price.max) }}&nbsp;₽{% else %}—{% endif %}</td>
-                    <td>{% if item.price and item.price.listings == -1 %}🚫{% elif item.price %}{{ item.price.listings }}{% if item.price.listings_raw > item.price.listings %} <small style="color:#888;">(из {{ item.price.listings_raw }})</small>{% endif %}{% else %}—{% endif %}</td>
+                    <td id="cell-avg-{{ item.id }}">
+                        {% if item.price and item.price.avg is not none %}{{ "%.0f"|format(item.price.avg) }}&nbsp;₽{% else %}—{% endif %}
+                    </td>
+                    <td id="cell-min-{{ item.id }}">
+                        {% if item.price and item.price.min is not none %}{{ "%.0f"|format(item.price.min) }}&nbsp;₽{% else %}—{% endif %}
+                    </td>
+                    <td id="cell-max-{{ item.id }}">
+                        {% if item.price and item.price.max is not none %}{{ "%.0f"|format(item.price.max) }}&nbsp;₽{% else %}—{% endif %}
+                    </td>
+                    <td id="cell-listings-{{ item.id }}">
+                        {% if item.price and item.price.listings == -1 %}🚫
+                        {% elif item.price and item.price.listings is not none %}{{ item.price.listings }}
+                            {% if item.price.listings_raw and item.price.listings_raw > item.price.listings %}
+                            <small style="color:#888;">(из {{ item.price.listings_raw }})</small>
+                            {% endif %}
+                        {% else %}—
+                        {% endif %}
+                    </td>
                     <td><button class="btn btn-secondary btn-sm" onclick="editPrice(this, {{ item.id }})">✎</button></td>
                 </tr>
                 {% endfor %}
@@ -335,20 +350,103 @@ function toggleHidden() {
 }
 
 {% if build.status == 'running' %}
+function updateRow(item) {
+    var statusEl = document.getElementById('cell-status-' + item.id);
+    if (statusEl) {
+        if (item.status === 'done') {
+            statusEl.innerHTML = '<span class="badge badge-done">Готово</span>';
+        } else if (item.status === 'running') {
+            statusEl.innerHTML = '<span class="badge badge-running">...</span>';
+        } else if (item.status === 'error') {
+            statusEl.innerHTML = '<span class="badge badge-error">Нет данных</span>';
+        } else {
+            statusEl.innerHTML = '<span class="badge badge-pending">' + item.status + '</span>';
+        }
+    }
+
+    function setCell(id, val) {
+        var el = document.getElementById(id);
+        if (el) el.innerHTML = val;
+    }
+
+    if (item.price) {
+        var mk = function(v) { return v != null ? v.toLocaleString('ru-RU') + '&nbsp;₽' : '—'; };
+        var med = item.price.median;
+        var avg = item.price.avg;
+        var pmin = item.price.min;
+        var pmax = item.price.max;
+
+        setCell('cell-median-' + item.id, med != null ? '<strong>' + med.toLocaleString('ru-RU') + '&nbsp;₽</strong>' : '—');
+        setCell('cell-avg-' + item.id, avg != null ? avg.toLocaleString('ru-RU') + '&nbsp;₽' : '—');
+        setCell('cell-min-' + item.id, pmin != null ? pmin.toLocaleString('ru-RU') + '&nbsp;₽' : '—');
+        setCell('cell-max-' + item.id, pmax != null ? pmax.toLocaleString('ru-RU') + '&nbsp;₽' : '—');
+
+        var l = item.price.listings;
+        var lr = item.price.listings_raw;
+        if (l === -1) {
+            setCell('cell-listings-' + item.id, '🚫');
+        } else if (l != null) {
+            var ls = String(l);
+            if (lr && lr > l) ls += ' <small style="color:#888;">(из ' + lr + ')</small>';
+            setCell('cell-listings-' + item.id, ls);
+        } else {
+            setCell('cell-listings-' + item.id, '—');
+        }
+    }
+}
+
+function updateTotal(totalPrice) {
+    var foot = document.querySelector('tfoot');
+    if (!foot) {
+        var table = document.querySelector('.table-wrap table');
+        if (table) {
+            foot = document.createElement('tfoot');
+            foot.innerHTML = '<tr>' +
+                '<td></td><td colspan="3"><strong>Итого:</strong></td>' +
+                '<td><strong class="total-price" id="totalCell">' +
+                (totalPrice != null ? totalPrice.toLocaleString('ru-RU') + '&nbsp;₽' : '—') +
+                '</strong></td><td colspan="5"></td></tr>';
+            table.appendChild(foot);
+        }
+    } else if (totalPrice != null) {
+        var tc = document.getElementById('totalCell');
+        if (tc) tc.innerHTML = totalPrice.toLocaleString('ru-RU') + '&nbsp;₽';
+    }
+}
+
 function pollStatus() {
     fetch('/api/builds/{{ build.id }}/status')
-        .then(r => r.json())
-        .then(data => {
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
             document.getElementById('progressBar').style.width = data.progress + '%';
             document.getElementById('progressText').textContent = data.progress + '%';
             document.getElementById('statusText').textContent = 'Обработано ' + data.items_done + ' из ' + data.items_total;
+
+            if (data.items) {
+                var total = 0;
+                var count = 0;
+                for (var i = 0; i < data.items.length; i++) {
+                    var item = data.items[i];
+                    updateRow(item);
+                    if (item.price && item.price.median != null) {
+                        total += item.price.median;
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    updateTotal(total);
+                    var tl = document.getElementById('totalLive');
+                    if (tl) tl.innerHTML = 'Текущая сумма: <strong>' + total.toLocaleString('ru-RU') + '&nbsp;₽</strong>';
+                }
+            }
+
             if (data.status === 'running') {
                 setTimeout(pollStatus, 2000);
             } else {
                 location.reload();
             }
         })
-        .catch(() => setTimeout(pollStatus, 3000));
+        .catch(function() { setTimeout(pollStatus, 3000); });
 }
 setTimeout(pollStatus, 2000);
 {% endif %}

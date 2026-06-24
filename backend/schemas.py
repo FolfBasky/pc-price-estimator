@@ -46,3 +46,4 @@ class JobStatusResponse(BaseModel):
     progress: int
     items_total: int
     items_done: int
+    items: list[ItemResponse] = []

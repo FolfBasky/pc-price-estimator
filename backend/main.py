@@ -290,13 +290,38 @@ def get_build_status(build_id: int):
         build = db.query(Build).filter(Build.id == build_id).first()
         if not build:
             raise HTTPException(404)
-        items = db.query(BuildItem).filter(BuildItem.build_id == build_id).all()
+        items = db.query(BuildItem).filter(BuildItem.build_id == build_id).order_by(BuildItem.sort_order, BuildItem.id).all()
         items_done = sum(1 for i in items if i.status in ("done", "error"))
+        item_responses = []
+        for item in items:
+            ct = db.query(ComponentType).filter(ComponentType.id == item.component_type_id).first()
+            price = None
+            if item.price_cache_id:
+                pc = db.query(PriceCache).filter(PriceCache.id == item.price_cache_id).first()
+                if pc:
+                    price = PriceStatsResponse(
+                        avg=float(pc.avg_price) if pc.avg_price else None,
+                        median=float(pc.median_price) if pc.median_price else None,
+                        min=float(pc.min_price) if pc.min_price else None,
+                        max=float(pc.max_price) if pc.max_price else None,
+                        listings=pc.listings_count,
+                        listings_raw=pc.listings_raw or pc.listings_count,
+                        source="cache",
+                    )
+            item_responses.append(ItemResponse(
+                id=item.id,
+                component_type=ct.slug if ct else "",
+                component_name=ct.name if ct else "",
+                search_query=item.search_query,
+                status=item.status,
+                price=price,
+            ))
         return JobStatusResponse(
             status=build.status,
             progress=build.progress,
             items_total=len(items),
             items_done=items_done,
+            items=item_responses,
         )
     finally:
         db.close()
@@ -662,6 +687,5 @@ def _get_total(db, build_id: int):
 
 async def _parse_single_item(build_id: int, item_id: int):
     """Parse a single item that was added to an existing build."""
-    from backend.price_engine import process_build
-    # Re-trigger full build processing
-    await process_build(build_id)
+    from backend.price_engine import parse_single_item as _psi
+    await _psi(build_id, item_id)

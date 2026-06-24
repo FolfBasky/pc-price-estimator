@@ -22,6 +22,7 @@ def _create_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
+    options.page_load_strategy = "eager"
     if PROXY_URL:
         options.add_argument(f"--proxy-server={PROXY_URL}")
     try:
@@ -31,7 +32,7 @@ def _create_driver():
         from selenium.webdriver.chrome.service import Service
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-    driver.set_page_load_timeout(30)
+    driver.set_page_load_timeout(15)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', {get: () => false});
@@ -49,7 +50,7 @@ def _is_page_blocked(driver) -> bool:
                     "подтвердите", "verify", "429",
                     "что нужно сделать"])
     except Exception:
-        return True
+        return False
 
 
 def _wait_for_block_clear(driver, max_wait: int = 300) -> bool:
@@ -71,18 +72,26 @@ def _wait_for_block_clear(driver, max_wait: int = 300) -> bool:
     return False
 
 
-def _safe_get(driver, url: str, retries=1):
-    for attempt in range(retries + 1):
-        try:
-            driver.get(url)
-            return
-        except TimeoutException:
-            if attempt < retries:
-                logger.warning(f"Page load timeout, retrying ({attempt+1}/{retries})")
-            else:
-                raise
-        except WebDriverException:
-            raise
+def _safe_get(driver, url: str):
+    try:
+        driver.get(url)
+    except TimeoutException:
+        # Eager strategy may still timeout — that's fine, page may have partial DOM
+        logger.warning("Page load timeout (eager strategy)")
+    except WebDriverException:
+        raise
+
+
+def _wait_for_items(driver, timeout: float = 15.0) -> bool:
+    """Wait up to `timeout` seconds for listing items to appear on the page."""
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        items = driver.find_elements(By.CSS_SELECTOR, '[data-marker="item"]')
+        if items:
+            return True
+        _time.sleep(0.5)
+    return False
 
 
 def _extract_all_listings(driver, max_listings: int) -> list[tuple[str, float]]:
@@ -121,6 +130,9 @@ def parse_avito_prices_selenium(search_query: str, max_listings: int = MAX_LISTI
             _safe_get(driver, f"{AVITO_BASE_URL}/all?q={encoded}")
             if _is_page_blocked(driver):
                 return BOOTCACHE_SENTINEL
+            _wait_for_items(driver)
+        else:
+            _wait_for_items(driver)
 
         all_raw = _extract_all_listings(driver, max_listings)
         logger.info(f"Page 1: {len(all_raw)} raw listings for: {search_query}")
