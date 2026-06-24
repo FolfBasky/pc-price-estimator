@@ -15,7 +15,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+# Try these models in order (biggest first); fall back to smaller on OOM
+_MODEL_SIZES = [
+    "Qwen/Qwen2.5-3B-Instruct",
+    "Qwen/Qwen2.5-1.5B-Instruct",
+    "Qwen/Qwen2.5-0.5B-Instruct",
+]
+
 MODEL_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
 
 _loaded = False
@@ -25,6 +31,7 @@ _model = None
 _tokenizer = None
 _device = None
 _load_lock = threading.Lock()
+_current_model_name = ""
 
 
 def _get_device():
@@ -34,12 +41,33 @@ def _get_device():
     return "cpu"
 
 
+def _try_load(model_name: str, device: str) -> tuple:
+    """Try to load a specific model. Returns (tokenizer, model) or raises."""
+    logger.info(f"Trying {model_name} on {device}...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        cache_dir=MODEL_CACHE_DIR,
+        trust_remote_code=True,
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        cache_dir=MODEL_CACHE_DIR,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        device_map="auto" if device == "cuda" else None,
+        trust_remote_code=True,
+    )
+    if device == "cpu":
+        model = model.to("cpu")
+    return tokenizer, model
+
+
 def load_model(force_reload=False):
     """
-    Load the model into GPU memory. Called once at startup.
+    Load a Qwen model on GPU. Tries 3B → 1.5B → 0.5B if VRAM is insufficient.
+    Falls back to CPU if none fit on GPU.
     Thread-safe, idempotent.
     """
-    global _model, _tokenizer, _device, _loaded, _load_status, _loaded_error
+    global _model, _tokenizer, _device, _loaded, _load_status, _loaded_error, _current_model_name
 
     if _loaded and not force_reload:
         return True
@@ -50,38 +78,67 @@ def load_model(force_reload=False):
 
         _load_status = "loading"
         _loaded_error = None
+        _loaded = False
         device = _get_device()
-        logger.info(f"Loading model {MODEL_NAME} on {device}...")
-        logger.info("This will download ~6GB on first run and may take a minute.")
 
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_NAME,
-                cache_dir=MODEL_CACHE_DIR,
-                trust_remote_code=True,
-            )
-            model = AutoModelForCausalLM.from_pretrained(
-                MODEL_NAME,
-                cache_dir=MODEL_CACHE_DIR,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map="auto" if device == "cuda" else None,
-                trust_remote_code=True,
-            )
-            if device == "cpu":
-                model = model.to("cpu")
+        models_to_try = list(_MODEL_SIZES)
+        last_err = None
 
-            _model = model
-            _tokenizer = tokenizer
-            _device = device
-            _loaded = True
-            _load_status = "ready"
-            logger.info(f"Model loaded on {device}. VRAM: ~6GB")
-            return True
-        except Exception as e:
-            _load_status = "error"
-            _loaded_error = str(e)
-            logger.error(f"Failed to load model: {e}")
-            return False
+        for model_name in models_to_try:
+            try:
+                _tokenizer, _model = _try_load(model_name, device)
+                _device = device
+                _loaded = True
+                _load_status = "ready"
+                _current_model_name = model_name
+                vr = "~6GB" if "3B" in model_name else ("~3GB" if "1.5B" in model_name else "~1GB")
+                logger.info(f"Loaded {model_name} on {device}. VRAM: {vr}")
+                return True
+            except torch.cuda.OutOfMemoryError as e:
+                logger.warning(f"OOM loading {model_name} on GPU: {e}")
+                last_err = e
+                if device == "cuda":
+                    import gc
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    logger.info("Cleared CUDA cache, trying smaller model...")
+                    continue
+                break
+            except Exception as e:
+                emsg = str(e).lower()
+                if "cuda out of memory" in emsg or "out of memory" in emsg:
+                    logger.warning(f"OOM loading {model_name} on GPU: {e}")
+                    last_err = e
+                    import gc
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    if device == "cuda":
+                        logger.info("Cleared CUDA cache, trying smaller model...")
+                        continue
+                last_err = e
+                logger.warning(f"Failed to load {model_name}: {e}")
+                continue
+
+        # If GPU fails for all sizes, try CPU with the smallest model
+        if device == "cuda" and not _loaded:
+            logger.warning("All GPU attempts failed, falling back to CPU...")
+            device = "cpu"
+            smallest = models_to_try[-1]
+            try:
+                _tokenizer, _model = _try_load(smallest, device)
+                _device = device
+                _loaded = True
+                _load_status = "ready"
+                _current_model_name = smallest
+                logger.info(f"Loaded {smallest} on CPU (fallback)")
+                return True
+            except Exception as e:
+                last_err = e
+
+        _load_status = "error"
+        _loaded_error = str(last_err)
+        logger.error(f"Failed to load any model. Last error: {last_err}")
+        return False
 
 
 _SYSTEM_PROMPT = """Извлеки все комплектующие ПК из текста. Перечисли всё, что упоминается.
@@ -89,18 +146,25 @@ _SYSTEM_PROMPT = """Извлеки все комплектующие ПК из �
 Правила:
 - Ищи ВСЕ типы: cpu, gpu, ram, motherboard, storage, psu, case, cooler
 - Извлекай даже если компонент просто упомянут в описании: "корпус имеет", "система охлаждения", "сжо", "кулеры"
-- Включай модель, бренд, объём в search_query
 - Если сказано "без [компонента]" — не включай его
 - Для case/cooler: если нет модели/бренда, а только описание (прозрачная панель, подсветка, вентиляторы) — пиши просто "игровой корпус" или "универсальный кулер"
 - Не выдумывай
 - Если компонент не указан явно или нет модели — не добавляй его
 
+ВАЖНО: search_query должен быть КОРОТКИМ и подходить для поиска на Avito:
+- Для GPU: пиши чипсет с префиксом (RTX 3050, GTX 1660 Super, RX 6600) — без бренда и лишних деталей
+- Для CPU: пиши модель (Ryzen 7 5700G, i5-10600)
+- Для RAM: пиши "XGB DDRX" (32GB DDR4 → "32GB DDR4")
+- Для storage: пиши ёмкость и тип (512GB SSD, 1TB NVMe)
+- Для PSU: пиши мощность (600W, 750W)
+- Для материнской платы: пиши модель серии (B550M, Z490, X570)
+
 Примеры:
 "Процессор: AMD Ryzen 5 5600, память 16GB, корпус NZXT, SSD 500GB, СЖО"
-→ [{"component_type":"cpu","search_query":"AMD Ryzen 5 5600"},{"component_type":"ram","search_query":"16GB DDR4"},{"component_type":"case","search_query":"корпус NZXT"},{"component_type":"storage","search_query":"500GB SSD"},{"component_type":"cooler","search_query":"СЖО"}]
+→ [{"component_type":"cpu","search_query":"Ryzen 5 5600"},{"component_type":"ram","search_query":"16GB DDR4"},{"component_type":"case","search_query":"игровой корпус"},{"component_type":"storage","search_query":"500GB SSD"},{"component_type":"cooler","search_query":"СЖО"}]
 
-"Материнская плата: MSI B560, Видеокарта: RTX 3060, корпус имеет стеклянные панели, установлено охлаждение"
-→ [{"component_type":"motherboard","search_query":"MSI B560"},{"component_type":"gpu","search_query":"RTX 3060"},{"component_type":"case","search_query":"игровой корпус"},{"component_type":"cooler","search_query":"универсальный кулер"}]
+"Материнская плата: MSI B560, Видеокарта: KFA2 GeForce RTX 3050 CORE 8GB, корпус имеет стеклянные панели"
+→ [{"component_type":"motherboard","search_query":"B560"},{"component_type":"gpu","search_query":"RTX 3050"},{"component_type":"case","search_query":"игровой корпус"}]
 
 "Процессор: Ryzen 9. Без видеокарты."
 → [{"component_type":"cpu","search_query":"Ryzen 9"}]
@@ -340,6 +404,54 @@ def _deduplicate(items: list[dict]) -> list[dict]:
     return result
 
 
+def _simplify_query(query: str, comp_type: str) -> str:
+    """Simplify search query for better Avito results — strip brand, keep core model."""
+    q = query.strip()
+    if comp_type == "gpu":
+        m = re.search(r'\b(RTX|GTX|RX|Radeon|Quadro)\s+\w+', q, re.IGNORECASE)
+        if m:
+            return m.group(0)
+        m = re.search(r'(\d{4})\s*(Ti|Super|XT)?', q, re.IGNORECASE)
+        if m:
+            return m.group(0)
+    elif comp_type == "cpu":
+        m = re.search(r'(Ryzen\s+\d\s+\d{4}[A-Z]*|Core\s+i\d[-\s]\d{4,5}[A-Z]*|i\d[-\s]\d{4,5}[A-Z]*|Pentium|Celeron|Threadripper)', q, re.IGNORECASE)
+        if m:
+            return m.group(0)
+    elif comp_type == "ram":
+        m = re.search(r'(\d+\s*GB).*?(DDR\d)', q, re.IGNORECASE)
+        if m:
+            return m.group(1) + ' ' + m.group(2)
+        m = re.search(r'(\d+\s*GB)', q, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    elif comp_type == "motherboard":
+        m = re.search(r'(B\d{3,4}[A-Z]*|H\d{3,4}[A-Z]*|Z\d{3,4}[A-Z]*|X\d{3,4}[A-Z]*|A\d{3,4}[A-Z]*)', q)
+        if m:
+            return m.group(0)
+    elif comp_type == "storage":
+        m = re.search(r'(?:(SSD|HDD|NVMe)\s*)?(\d+\s*(?:GB|TB))(?:\s*(SSD|HDD|NVMe))?', q, re.IGNORECASE)
+        if m:
+            result = m.group(2).strip()
+            prefix = m.group(1)
+            suffix = m.group(3)
+            if prefix:
+                result = prefix + ' ' + result
+            elif suffix:
+                result = suffix + ' ' + result
+            return result
+    elif comp_type == "psu":
+        m = re.search(r'(\d+)\s*W', q, re.IGNORECASE)
+        if m:
+            return m.group(0)
+    return q
+
+
+def _simplify_queries(items: list[dict]) -> list[dict]:
+    """Apply _simplify_query to all items."""
+    return [{"component_type": item["component_type"], "search_query": _simplify_query(item["search_query"], item["component_type"])} for item in items]
+
+
 def parse_description(text: str) -> list[dict]:
     """
     Parse build description using AI model only.
@@ -349,8 +461,9 @@ def parse_description(text: str) -> list[dict]:
     ai_result = parse_with_ai(normalized)
     if ai_result:
         deduped = _deduplicate(ai_result)
-        logger.info(f"AI parsed {len(ai_result)} components → {len(deduped)} after dedup")
-        return deduped
+        simplified = _simplify_queries(deduped)
+        logger.info(f"AI parsed {len(ai_result)} components → {len(simplified)} after dedup+simplify")
+        return simplified
 
     return []
 
@@ -361,6 +474,8 @@ def get_status() -> dict:
         "status": _load_status,
         "error": _loaded_error,
         "ready": _loaded and _model is not None,
+        "model": _current_model_name,
+        "device": _device,
     }
 
 
